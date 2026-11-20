@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"gitlab.gutocarvalho.net/open/gcn/goweb/auth"
+	"go.yaml.in/yaml/v3"
 )
 
 //go:embed templates/*.html
@@ -46,15 +47,23 @@ type config struct {
 	statusHosts map[string]bool // hosts that serve only Kuma's public paths
 	trusted     []netip.Prefix  // proxies whose X-Forwarded-For/-Proto are believed (nginx)
 	auth        auth.Config     // sign-in providers (goweb)
-	admins      map[string]bool // gate.admins: User.Key() values allowed in; empty = every admin
+	admins      map[string]bool // gate.admins: User.Key() values allowed in
+	allowAll    bool            // gate.allow_all_admins: every admin of every provider instead
 }
 
-// gateSection is the app's own part of the YAML file (auth.Section reads it).
+// gateSection is the app's own part of the YAML file (auth.Section reads it, refusing
+// unknown keys). Exactly one of the two must be set: an allowlist that is missing or
+// misspelled never means "everyone".
 type gateSection struct {
-	// Admins, if not empty, is the only list of people (User.Key(), "<provider-id>:<id>")
-	// let through, on top of the admin level.
+	// Admins is the list of people (User.Key(), "<provider-id>:<id>") let through, on top
+	// of the admin level.
 	Admins []string `yaml:"admins"`
+	// AllowAllAdmins lets in every admin of every provider, without a list.
+	AllowAllAdmins bool `yaml:"allow_all_admins"`
 }
+
+// topLevelKeys are the only keys the YAML file may have.
+var topLevelKeys = map[string]bool{"auth": true, "gate": true}
 
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -119,10 +128,45 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return c, fmt.Errorf("KUMAGATE_AUTH_CONFIG: %w", err)
 	}
-	if c.admins, err = parseAdmins(data, c.auth.Providers); err != nil {
+	if c.admins, c.allowAll, err = parseAdmins(data, c.auth.Providers); err != nil {
 		return c, fmt.Errorf("KUMAGATE_AUTH_CONFIG: %w", err)
 	}
+	if err := shareProxies(c.auth.Providers, c.trusted); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// shareProxies gives the local provider the gate's trusted proxies, so its sign-in limits
+// count the real client and not nginx (or a container bridge) as one shared address. One
+// setting: a different trusted_proxies in the YAML stops the start.
+func shareProxies(providers []auth.Provider, trusted []netip.Prefix) error {
+	for _, p := range providers {
+		l, ok := p.(*auth.Local)
+		if !ok {
+			continue
+		}
+		if len(l.TrustedProxies) > 0 && !samePrefixes(l.TrustedProxies, trusted) {
+			return fmt.Errorf("KUMAGATE_AUTH_CONFIG: auth.providers.%s.trusted_proxies differs from KUMAGATE_TRUSTED_PROXIES; remove it from the YAML (the gate passes its own to the local accounts)", providerID(p))
+		}
+		l.TrustedProxies = append([]netip.Prefix(nil), trusted...)
+	}
+	return nil
+}
+
+func samePrefixes(a, b []netip.Prefix) bool {
+	set := map[netip.Prefix]bool{}
+	for _, p := range a {
+		set[p.Masked()] = true
+	}
+	other := map[netip.Prefix]bool{}
+	for _, p := range b {
+		if !set[p.Masked()] {
+			return false
+		}
+		other[p.Masked()] = true
+	}
+	return len(set) == len(other)
 }
 
 // parseUpstream checks KUMAGATE_UPSTREAM: an http(s) URL with a host and nothing else, so
@@ -137,12 +181,32 @@ func parseUpstream(s string) (*url.URL, error) {
 	return u, nil
 }
 
-// parseAdmins reads gate.admins from the YAML file. Each entry is "<provider-id>:<id>" and
-// the provider must exist, so a typo stops the start instead of locking everyone out.
-func parseAdmins(data []byte, providers []auth.Provider) (map[string]bool, error) {
+// parseAdmins reads the gate section of the YAML file. Each admins entry is
+// "<provider-id>:<id>" and the provider must exist. Unknown keys (top level or under gate), a
+// missing section or an empty list without allow_all_admins stop the start: a typo must
+// never open Kuma to every admin.
+func parseAdmins(data []byte, providers []auth.Provider) (map[string]bool, bool, error) {
+	var top map[string]any
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil, false, errors.New("not a YAML mapping")
+	}
+	for k := range top {
+		if !topLevelKeys[k] {
+			return nil, false, fmt.Errorf("unknown top-level key %q (only auth and gate)", k)
+		}
+	}
 	var g gateSection
-	if _, err := auth.Section(data, "gate", &g); err != nil {
-		return nil, err
+	found, err := auth.Section(data, "gate", &g)
+	if err != nil {
+		return nil, false, err
+	}
+	switch {
+	case !found || (len(g.Admins) == 0 && !g.AllowAllAdmins):
+		return nil, false, errors.New(`gate: list the people allowed in "gate: admins: [<provider-id>:<account>, ...]", or set "gate: allow_all_admins: true" to let in every admin of every provider`)
+	case len(g.Admins) > 0 && g.AllowAllAdmins:
+		return nil, false, errors.New("gate: set either admins or allow_all_admins, not both")
+	case g.AllowAllAdmins:
+		return map[string]bool{}, true, nil
 	}
 	ids := map[string]bool{}
 	for _, p := range providers {
@@ -153,14 +217,14 @@ func parseAdmins(data []byte, providers []auth.Provider) (map[string]bool, error
 		a = strings.TrimSpace(a)
 		src, id, ok := strings.Cut(a, ":")
 		if !ok || src == "" || id == "" {
-			return nil, fmt.Errorf("gate.admins: %q must be <provider-id>:<account>, like local:ana or bolha:ana", a)
+			return nil, false, fmt.Errorf("gate.admins: %q must be <provider-id>:<account>, like local:ana or bolha:ana", a)
 		}
 		if !ids[src] {
-			return nil, fmt.Errorf("gate.admins: %q names provider %q, which is not in auth.providers", a, src)
+			return nil, false, fmt.Errorf("gate.admins: %q names provider %q, which is not in auth.providers", a, src)
 		}
 		out[a] = true
 	}
-	return out, nil
+	return out, false, nil
 }
 
 // providerID is the id goweb gives a provider: its ID, or its kind when empty.
@@ -300,8 +364,8 @@ func main() {
 			log.Printf("shutdown: %v", err)
 		}
 	}()
-	log.Printf("kuma-gate %s listening on %s; admin host %s, upstream %s, %d status host(s), %d provider(s), admins allowlist: %d",
-		version, cfg.listen, cfg.adminHost, cfg.upstream.Redacted(), len(cfg.statusHosts), len(cfg.auth.Providers), len(cfg.admins))
+	log.Printf("kuma-gate %s listening on %s; admin host %s, upstream %s, %d status host(s), %d provider(s), admins allowlist: %d, allow all admins: %v",
+		version, cfg.listen, cfg.adminHost, cfg.upstream.Redacted(), len(cfg.statusHosts), len(cfg.auth.Providers), len(cfg.admins), cfg.allowAll)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

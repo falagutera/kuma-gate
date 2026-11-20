@@ -71,6 +71,10 @@ func TestWebsocketNeedsSession(t *testing.T) {
 	if _, _, st := upgrade(t, addr, adminHost, wsPath, "Cookie", ana, "Origin", "https://evil.example"); !strings.HasPrefix(st, "403") {
 		t.Errorf("cross-origin websocket: %s", st)
 	}
+	// a handshake that proves no origin at all (browsers always send Origin on one)
+	if _, _, st := upgrade(t, addr, adminHost, wsPath, "Cookie", ana); !strings.HasPrefix(st, "403") {
+		t.Errorf("websocket without Origin: %s", st)
+	}
 	if _, _, st := upgrade(t, addr, adminHost, wsPath, "Cookie", g.login(t, "bob"), "Origin", "https://"+adminHost); !strings.HasPrefix(st, "403") {
 		t.Errorf("not in gate.admins: %s", st)
 	}

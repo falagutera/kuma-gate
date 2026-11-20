@@ -23,8 +23,8 @@ Run it: copy `.env.example` and `config.example.yaml`, start a Kuma on 127.0.0.1
 
 | File | What it holds |
 |---|---|
-| `main.go` | config from env and the YAML (`gate.admins`), validation, `-healthcheck`, `kuma-gate user ...`, the HTTP server with its timeouts, graceful shutdown |
-| `policy.go` | **the public path list with Kuma source refs**, path canonicalisation (`canonical`), host normalisation, log redaction of push tokens |
+| `main.go` | config from env and the YAML (`gate.admins` / `allow_all_admins`, fail closed; trusted proxies passed to the local provider), validation, `-healthcheck`, `kuma-gate user ...`, the HTTP server with its timeouts, graceful shutdown |
+| `policy.go` | **the public path list with Kuma source refs** (and which keep their query string), path canonicalisation (`canonical`), host normalisation, log redaction of push tokens |
 | `server.go` | the decision in `serve` (method, path, health, host, gate assets, public, gate pages, session + allowlist + origin), security headers on gate responses, pages |
 | `proxy.go` | `httputil.ReverseProxy` (Rewrite): Host kept, X-Forwarded-* set, gate cookies stripped both ways, body limits, per-request deadlines, websocket session re-check, 502 page |
 | `i18n.go` | every text in pt and en; language from `?lang=`, cookie, Accept-Language, KUMAGATE_LANG |

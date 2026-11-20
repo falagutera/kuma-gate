@@ -12,8 +12,9 @@ services:
     environment:
       KUMAGATE_AUTH_CONFIG: /etc/kuma-gate/config.yaml
       KUMAGATE_DATA: /data
-      # nginx on the host reaches the container from the bridge's gateway, not 127.0.0.1
-      KUMAGATE_TRUSTED_PROXIES: 172.16.0.0/12
+      # nginx on the host reaches the container from the bridge's gateway (fixed below),
+      # never a whole range: anything trusted can write X-Forwarded-For
+      KUMAGATE_TRUSTED_PROXIES: 172.30.53.1
     volumes:
       - ./config.yaml:/etc/kuma-gate/config.yaml:ro
       - kuma-gate-data:/data
@@ -23,6 +24,14 @@ services:
     mem_limit: 128m
     ports:
       - "127.0.0.1:3003:3003"
+    networks: [gate]
+
+networks:
+  gate:
+    ipam:
+      config:
+        - subnet: 172.30.53.0/24
+          gateway: 172.30.53.1
 
 volumes:
   kuma-gate-data:

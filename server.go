@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"gitlab.gutocarvalho.net/open/gcn/goweb/auth"
@@ -26,11 +27,16 @@ type server struct {
 	assets    http.Handler    // the gate's own files under /assets/
 	ownAssets map[string]bool // their paths: /assets/style.css...
 	wsRecheck time.Duration   // how often an open websocket's session is checked again
-	baseOrig  string          // scheme://host of KUMAGATE_BASE_URL, for the Origin check
+	baseOrig  string          // scheme://host[:port] of KUMAGATE_BASE_URL, default port dropped
+	badPaths  *logLimiter     // the "400 non-canonical" log lines, at most badPathLogs a minute
 }
 
+// badPathLogs: scanners send odd paths by the thousand; the disk of the Kuma host is small.
+const badPathLogs = 20
+
 func newServer(cfg config, tmpl *template.Template) (*server, error) {
-	s := &server{cfg: cfg, tmpl: tmpl, wsRecheck: 30 * time.Second, ownAssets: map[string]bool{}}
+	s := &server{cfg: cfg, tmpl: tmpl, wsRecheck: 30 * time.Second, ownAssets: map[string]bool{},
+		badPaths: &logLimiter{max: badPathLogs, now: time.Now}}
 	ac := cfg.auth
 	ac.App = "kuma-gate" // cookies: __Host-kuma-gate, -state, -csrf, -pending
 	ac.Title, ac.Family, ac.Version = "kuma-gate", cfg.family, version
@@ -45,9 +51,7 @@ func newServer(cfg config, tmpl *template.Template) (*server, error) {
 	if s.auth, err = auth.New(ac); err != nil {
 		return nil, err
 	}
-	if u, err := url.Parse(cfg.auth.BaseURL); err == nil {
-		s.baseOrig = strings.ToLower(u.Scheme + "://" + u.Host)
-	}
+	s.baseOrig = normOrigin(cfg.auth.BaseURL)
 	sub, err := fs.Sub(assetFS, "assets")
 	if err != nil {
 		return nil, err
@@ -99,7 +103,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 	path, ok := canonical(r)
 	if !ok {
 		// Only the first segment: the rest of a refused path may be an encoded push token.
-		log.Printf("deny: 400 non-canonical path %q host=%q ip=%s", firstSegment(r.RequestURI), r.Host, clientIP(r, s.cfg.trusted))
+		s.badPaths.printf("deny: 400 non-canonical path %q host=%q ip=%s", firstSegment(r.RequestURI), r.Host, clientIP(r, s.cfg.trusted))
 		s.renderError(w, r, http.StatusBadRequest)
 		return
 	}
@@ -123,7 +127,10 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		securityHeaders(s.assets).ServeHTTP(w, r)
 		return
 	}
-	if isPublic(r.Method, path) && !isUpgrade(r) {
+	if ok, keepQuery := public(r.Method, path); ok && !isUpgrade(r) {
+		if !keepQuery {
+			r.URL.RawQuery, r.URL.ForceQuery = "", false // see policy.go: Kuma's cache keys on it
+		}
 		s.forward(w, r, publicBodyLimit, nil)
 		return
 	}
@@ -161,7 +168,7 @@ func (s *server) private(w http.ResponseWriter, r *http.Request, path string) {
 		s.forbidden(w, r, u)
 		return
 	}
-	if needsSameOrigin(r, path) && !s.sameOrigin(r) {
+	if needsSameOrigin(r, path) && !s.sameOrigin(r, isUpgrade(r) || strings.HasPrefix(path, "/socket.io/")) {
 		log.Printf("deny: 403 cross-origin %s %q account=%s origin=%q sec-fetch-site=%q ip=%s",
 			r.Method, redactPath(path), u.Key(), r.Header.Get("Origin"), r.Header.Get("Sec-Fetch-Site"), clientIP(r, s.cfg.trusted))
 		s.deny(w, r, http.StatusForbidden)
@@ -170,12 +177,13 @@ func (s *server) private(w http.ResponseWriter, r *http.Request, path string) {
 	s.forward(w, r, adminBodyLimit, &u)
 }
 
-// allowed: an admin, and in gate.admins when that list is set.
+// allowed: an admin, and in gate.admins unless gate.allow_all_admins is set. An empty list
+// lets nobody in (loadConfig refuses to start that way anyway).
 func (s *server) allowed(u auth.User) bool {
 	if u.Level < auth.Admin {
 		return false
 	}
-	return len(s.cfg.admins) == 0 || s.cfg.admins[u.Key()]
+	return s.cfg.allowAll || s.cfg.admins[u.Key()]
 }
 
 func (s *server) forbidden(w http.ResponseWriter, r *http.Request, u auth.User) {
@@ -248,14 +256,70 @@ func needsSameOrigin(r *http.Request, path string) bool {
 	return true
 }
 
-func (s *server) sameOrigin(r *http.Request) bool {
-	if o := r.Header.Get("Origin"); o != "" && strings.ToLower(o) != s.baseOrig {
+// sameOrigin: a present Origin must be the admin host's and a present Sec-Fetch-Site must
+// be same-origin. With strict (socket.io and upgrades, Kuma's whole admin channel) one of the
+// two must also be there: browsers always send Origin on a websocket handshake and
+// Sec-Fetch-Site on socket.io's XHRs, so a request with neither is not Kuma's own page.
+func (s *server) sameOrigin(r *http.Request, strict bool) bool {
+	o := r.Header.Get("Origin")
+	if o != "" && normOrigin(o) != s.baseOrig {
 		return false
 	}
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+	site := r.Header.Get("Sec-Fetch-Site")
+	if site != "" && site != "same-origin" {
 		return false
 	}
-	return true
+	return !strict || o != "" || site == "same-origin"
+}
+
+// normOrigin is scheme://host[:port] in lower case without the scheme's default port, so
+// "https://host:443" and "https://host" compare equal. Anything unparsable is "" (never equal
+// to the base, which is validated at start).
+func normOrigin(s string) string {
+	u, err := url.Parse(strings.TrimSpace(s))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "\x00invalid"
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return strings.ToLower(u.Scheme) + "://" + host
+}
+
+// logLimiter prints at most max lines a minute; the next line after a full minute says how
+// many were dropped.
+type logLimiter struct {
+	mu         sync.Mutex
+	max        int
+	now        func() time.Time
+	start      time.Time
+	n, dropped int
+}
+
+func (l *logLimiter) printf(format string, args ...any) {
+	l.mu.Lock()
+	now := l.now()
+	if now.Sub(l.start) >= time.Minute {
+		if l.dropped > 0 {
+			log.Printf("deny: %d similar lines suppressed in the last minute", l.dropped)
+		}
+		l.start, l.n, l.dropped = now, 0, 0
+	}
+	if l.n >= l.max {
+		l.dropped++
+		l.mu.Unlock()
+		return
+	}
+	l.n++
+	l.mu.Unlock()
+	log.Printf(format, args...)
 }
 
 // securityHeaders go on every response the gate itself writes (pages, errors, its CSS).
@@ -308,6 +372,7 @@ type page struct {
 	Status   int
 	Detail   string        // a text key with more about an error
 	Account  string        // the signed-in person, on the logout and 403 pages
+	Local    bool          // a local account: the logout page offers "sign out everywhere"
 	CSRF     template.HTML // the sign-out form's token
 }
 
@@ -322,6 +387,7 @@ func (s *server) handleLogoutPage(w http.ResponseWriter, r *http.Request) {
 	p := s.newPage(w, r)
 	if u, ok := s.auth.User(r); ok {
 		p.Account = u.Name
+		p.Local = u.Provider == "local" // goweb's POST /account/signout-all is for local sessions
 		p.CSRF = s.auth.CSRFInput(w, r)
 	}
 	s.render(w, http.StatusOK, "logout.html", p)

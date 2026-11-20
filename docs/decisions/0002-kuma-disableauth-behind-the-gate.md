@@ -22,9 +22,15 @@ kuma-gate is the only way to it. The gate:
   segment or `;` is a 400, so the gate and Kuma never read a path differently;
 - serves Kuma's admin UI only on the BaseURL host; other hosts get the public paths or a 404,
   never a sign-in page;
-- requires a goweb session at level admin, and, when `gate.admins` is set, one of the listed
-  `User.Key()` values; refuses socket.io, upgrades and unsafe methods from another origin;
-- re-checks the session of an open websocket every 30 s and closes it when the session ends;
+- requires a goweb session at level admin and one of the `User.Key()` values in `gate.admins`;
+  letting in every admin needs the explicit `gate.allow_all_admins: true`, and a missing,
+  empty or misspelled section stops the start (fail closed);
+- refuses socket.io, upgrades and unsafe methods from another origin, and socket.io and
+  upgrades that carry neither `Origin` nor `Sec-Fetch-Site: same-origin`;
+- re-checks the session cookie of an open websocket every 30 s and closes it when that session
+  ends;
+- drops the query string on public routes whose Kuma handler ignores it, so it cannot bypass
+  Kuma's response cache;
 - strips its own cookies before forwarding and sets X-Forwarded-* itself.
 
 ## Consequences
@@ -36,6 +42,12 @@ kuma-gate is the only way to it. The gate:
 - A new Kuma version may add routes. New private routes are safe (default deny); new public
   ones stay closed until added to `policy.go` with their source line. Review `policy.go` against
   Kuma's `server/routers/` and `src/router.js` on every Kuma upgrade.
-- Sessions from Mastodon/OIDC are stateless: signing out ends the cookie, not a websocket opened
-  in another tab before; that one closes at most when the session expires (re-check).
+- Sessions are signed cookies; the gate cannot revoke one. POST /logout only clears the cookie
+  in that browser: a Kuma tab already open elsewhere keeps admin until the session expires
+  (`session_ttl`, 4 h in the examples). Only "sign out everywhere" (`/account/signout-all`) or a
+  change to the account (password, TOTP reset, level, disable) ends local sessions everywhere;
+  for Mastodon and OIDC, only the expiry or removal from `gate.admins` (and a restart) does.
+  goweb is not changed for this; a server-side revocation list would be the fix if needed.
+- The local accounts' sign-in limits use `KUMAGATE_TRUSTED_PROXIES` (passed on by the gate), so
+  there is one setting and a container bridge doesn't turn every sign-in into one address.
 - Revisit if Kuma gains real multi-user or SSO support, or a trusted-header auth mode.

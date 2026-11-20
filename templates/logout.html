@@ -5,6 +5,8 @@
   {{if .Account}}
   <p class="lede">{{printf .T.logout_lede .Account}}</p>
   <form method="post" action="/logout">{{.CSRF}}<button type="submit">{{.T.logout_btn}}</button> <a class="btn secondary" href="/dashboard">{{.T.open_kuma}}</a></form>
+  <p class="lede">{{if .Local}}{{.T.logout_tabs_local}}{{else}}{{.T.logout_tabs_remote}}{{end}}</p>
+  {{if .Local}}<form method="post" action="/account/signout-all">{{.CSRF}}<button type="submit" class="secondary">{{.T.logout_all_btn}}</button></form>{{end}}
   {{else}}
   <p class="lede">{{.T.logout_none}}</p>
   <p><a class="btn" href="/login">{{.T.signin}}</a></p>

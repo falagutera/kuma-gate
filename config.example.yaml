@@ -1,10 +1,11 @@
 # kuma-gate: sign-in providers (goweb's "auth" section) and the gate's own "gate" section.
 # Point KUMAGATE_AUTH_CONFIG at this file. It holds no secret: it names the variables that do.
-# Unknown keys, a wrong field for a provider type or an empty secret variable stop the start
-# with a message that says what is wrong.
+# Unknown keys (at the top level only "auth" and "gate"), a wrong field for a provider type,
+# an empty secret variable or a missing allowlist stop the start with a message that says
+# what is wrong.
 
 auth:
-  session_ttl: 8h            # how long a sign-in lasts
+  session_ttl: 4h            # how long a sign-in lasts (and an open Kuma tab, see the README)
   providers:
     # Local accounts: kept by kuma-gate (argon2id passwords, TOTP required for admins).
     # Needs KUMAGATE_AUTH_KEY. Create the first one with: kuma-gate user add <name> admin
@@ -13,7 +14,7 @@ auth:
       label: Local account
       totp_level: admin                        # TOTP from this level up (viewer, editor, admin)
       users_file: /var/lib/kuma-gate/users.json
-      trusted_proxies: [127.0.0.1, "::1"]      # nginx; whose X-Forwarded-For counts for the sign-in limits
+      # no trusted_proxies here: the gate passes KUMAGATE_TRUSTED_PROXIES to the local accounts
 
     # A Mastodon instance. On the instance: Preferences > Development > New application,
     # scope "profile" only, redirect URI <KUMAGATE_BASE_URL>/auth/callback.
@@ -40,8 +41,12 @@ auth:
     #   roles: {kuma-admins: admin}             # names only the provider's administrators control
 
 gate:
-  # Who may pass, on top of the admin level: "<provider id>:<account>". Empty or missing:
-  # every admin of every provider. Everyone who passes is Kuma's single admin user.
+  # Who may pass, on top of the admin level: "<provider id>:<account>", case-sensitive; for
+  # Mastodon the account is its acct on its own instance (gutocarvalho, not
+  # gutocarvalho@bolha.us). Required: a missing or empty list stops the start. Everyone who
+  # passes is Kuma's single admin user.
+  # To let in every admin of every provider instead, remove admins and set:
+  #   allow_all_admins: true
   admins:
     - local:guto
     # - bolha:gutocarvalho

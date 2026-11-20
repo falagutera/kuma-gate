@@ -12,5 +12,10 @@ published as `registry.gutocarvalho.net/images/kuma-gate:<version>-<build>`.
 - Status pages, badges and push URLs keep working without signing in, on the main host and on
   extra status-only hosts; everything else of Kuma is closed there.
 - Odd-looking addresses (`..`, `//`, encoded slashes) are refused; push tokens never reach the log.
-- `/logout` page with a sign-out button, pages in Portuguese and English, release notes at
+- The YAML must say who gets in: `gate.admins` (a list of people) or, explicitly,
+  `gate.allow_all_admins: true`. A missing, empty or misspelled section stops the start.
+- Query strings reach Kuma only where Kuma reads them (push, badges, incident history), so
+  random ones cannot bypass Kuma's response cache.
+- `/logout` page with a sign-out button; local accounts also get "Sign out everywhere", which
+  closes Kuma tabs open in other browsers. Pages in Portuguese and English, release notes at
   `/release-notes`, health check at `/healthz`.

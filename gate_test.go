@@ -8,6 +8,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"gitlab.gutocarvalho.net/open/gcn/goweb/auth"
 )
 
 // Every SPA route of Kuma 2.5.12's src/router.js (children expanded) and every non-public
@@ -214,14 +217,224 @@ func TestSessionAndAllowlist(t *testing.T) {
 	}
 }
 
-func TestNoAllowlistLetsEveryAdminIn(t *testing.T) {
-	g := newGate(t, opts{admins: "[]"})
+// Every admin gets in only when the YAML says so in words: gate.allow_all_admins.
+func TestAllowAllAdmins(t *testing.T) {
+	g := newGate(t, opts{gate: "gate:\n  allow_all_admins: true\n"})
 	if rec := g.do(t, "GET", adminHost, "/dashboard", nil, "Cookie", g.login(t, "bob")); rec.Code != 200 {
-		t.Fatalf("bob without an allowlist: %d", rec.Code)
+		t.Fatalf("bob with allow_all_admins: %d", rec.Code)
 	}
 	if rec := g.do(t, "GET", adminHost, "/dashboard", nil, "Cookie", g.login(t, "eve")); rec.Code != 403 {
-		t.Fatalf("a viewer without an allowlist: %d", rec.Code)
+		t.Fatalf("a viewer with allow_all_admins: %d", rec.Code)
 	}
+}
+
+// A missing, misspelled or empty allowlist stops the start; it never means "everyone".
+func TestAllowlistFailsClosed(t *testing.T) {
+	for name, gate := range map[string]string{
+		"no gate section":          "",
+		"gate misspelled":          "gates:\n  admins: [bolha:ana]\n",
+		"admins at the top level":  "admins: [bolha:ana]\n",
+		"empty gate":               "gate: {}\n",
+		"empty admins":             "gate:\n  admins: []\n",
+		"admins without a value":   "gate:\n  admins:\n",
+		"admins misspelled":        "gate:\n  admin: [bolha:ana]\n",
+		"allow_all_admins false":   "gate:\n  allow_all_admins: false\n",
+		"both set":                 "gate:\n  admins: [bolha:ana]\n  allow_all_admins: true\n",
+		"unknown top-level key":    "gate:\n  admins: [bolha:ana]\nextra: 1\n",
+		"allow_all_admins as text": "gate:\n  allow_all_admins: yes please\n",
+	} {
+		g := gate
+		if g == "" {
+			g = "\n" // writeConfig's default needs a non-empty gate text to be replaced
+		}
+		writeConfig(t, opts{gate: g}, "https://bolha.example")
+		if _, err := loadConfig(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	writeConfig(t, opts{gate: "gate:\n  allow_all_admins: true\n"}, "https://bolha.example")
+	if c, err := loadConfig(); err != nil || !c.allowAll || len(c.admins) != 0 {
+		t.Fatalf("allow_all_admins: %+v %v", c.allowAll, err)
+	}
+}
+
+// The query string reaches Kuma only where Kuma reads it (policy.go): elsewhere a random
+// query would bust Kuma's 1000-entry response cache.
+func TestPublicQueryOnlyWhereKumaReadsIt(t *testing.T) {
+	g := newGate(t, opts{})
+	for path, want := range map[string]string{
+		"/?r=1":                      "",
+		"/status/bolha?edit":         "",
+		"/status/bolha/rss?r=1":      "",
+		"/status?r=1":                "",
+		"/status-page?r=1":           "",
+		"/api/entry-page?r=1":        "",
+		"/api/status-page/bolha?r=1": "",
+		"/api/status-page/heartbeat/bolha?r=12345":           "",
+		"/api/status-page/bolha/manifest.json?r=1":           "",
+		"/assets/index-D3kJ8a_x.js?v=2":                      "",
+		"/upload/logo1.png?t=123":                            "",
+		"/icon.svg?r=1":                                      "",
+		"/robots.txt?r=1":                                    "",
+		"/api/push/abc?status=up&msg=OK&ping=12":             "status=up&msg=OK&ping=12",
+		"/api/badge/1/status?label=x&upColor=green":          "label=x&upColor=green",
+		"/api/badge/1/uptime/24h?labelPrefix=a":              "labelPrefix=a",
+		"/api/badge/1/cert-exp?date=true":                    "date=true",
+		"/api/badge/1/response?style=flat":                   "style=flat",
+		"/api/status-page/bolha/incident-history?cursor=abc": "cursor=abc",
+		"/api/status-page/bolha/badge?label=Status":          "label=Status",
+	} {
+		if rec := g.do(t, "GET", bolhaHost, path, nil); rec.Code != 200 {
+			t.Errorf("%s: %d", path, rec.Code)
+			continue
+		}
+		if got := g.kuma.last().RawQuery; got != want {
+			t.Errorf("%s: Kuma got query %q, want %q", path, got, want)
+		}
+	}
+	// a signed-in admin's own requests keep theirs
+	g.do(t, "GET", adminHost, "/dashboard?x=1", nil, "Cookie", g.login(t, "ana"))
+	if got := g.kuma.last().RawQuery; got != "x=1" {
+		t.Errorf("private request lost its query: %q", got)
+	}
+}
+
+// Kuma's admin channel (socket.io, upgrades) must prove its origin; a request carrying
+// neither Origin nor Sec-Fetch-Site is refused there, and still passes elsewhere.
+func TestSocketIONeedsProvenOrigin(t *testing.T) {
+	g := newGate(t, opts{})
+	ana := g.login(t, "ana")
+	for _, m := range []string{"GET", "POST"} {
+		if rec := g.do(t, m, adminHost, "/socket.io/?EIO=4&transport=polling", strings.NewReader("x"), "Cookie", ana); rec.Code != 403 {
+			t.Errorf("%s socket.io without Origin or Sec-Fetch-Site: %d", m, rec.Code)
+		}
+	}
+	if g.kuma.count() != 0 {
+		t.Fatal("an unproven socket.io request reached Kuma")
+	}
+	if rec := g.do(t, "GET", adminHost, "/socket.io/?EIO=4&transport=polling", nil, "Cookie", ana, "Origin", "https://"+adminHost+":443"); rec.Code != 200 {
+		t.Errorf("Origin with the default port: %d", rec.Code)
+	}
+	if rec := g.do(t, "POST", adminHost, "/api/whatever", strings.NewReader("x"), "Cookie", ana); rec.Code != 200 {
+		t.Errorf("a non-socket.io POST without either header: %d", rec.Code)
+	}
+}
+
+// KUMAGATE_BASE_URL with an explicit default port still matches the browser's Origin.
+func TestBaseURLWithDefaultPort(t *testing.T) {
+	writeConfig(t, opts{}, newFakeMastodon(t).URL)
+	t.Setenv("KUMAGATE_BASE_URL", "https://"+adminHost+":443")
+	t.Setenv("KUMAGATE_UPSTREAM", newFakeKuma(t).srv.URL)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := newServer(cfg, mustTemplates(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "/socket.io/", nil)
+	r.Header.Set("Origin", "https://"+adminHost)
+	if cfg.adminHost != adminHost || !s.sameOrigin(r, true) {
+		t.Fatalf("admin host %q, origin %q", cfg.adminHost, s.baseOrig)
+	}
+	for in, want := range map[string]string{
+		"https://Status.Example.org:443": "https://status.example.org",
+		"http://x:80":                    "http://x",
+		"https://x:8443":                 "https://x:8443",
+		"https://[::1]:443":              "https://[::1]",
+	} {
+		if got := normOrigin(in); got != want {
+			t.Errorf("normOrigin(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if normOrigin("null") == normOrigin("garbage") && normOrigin("null") == s.baseOrig {
+		t.Error("an unparsable Origin matched")
+	}
+}
+
+// The "400 non-canonical" line is limited per minute, with a count of what was dropped.
+func TestBadPathLogIsRateLimited(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	g := newGate(t, opts{})
+	now := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	g.s.badPaths = &logLimiter{max: badPathLogs, now: func() time.Time { return now }}
+	for range 500 {
+		g.do(t, "GET", adminHost, "/a/../b", nil)
+	}
+	if n := strings.Count(buf.String(), "non-canonical"); n != badPathLogs {
+		t.Fatalf("%d lines logged in a minute, want %d", n, badPathLogs)
+	}
+	now = now.Add(61 * time.Second)
+	g.do(t, "GET", adminHost, "/a/../b", nil)
+	if !strings.Contains(buf.String(), "480 similar lines suppressed") {
+		t.Fatalf("no suppressed count:\n%s", buf.String())
+	}
+}
+
+// The local accounts' sign-in limits use the gate's trusted proxies (one setting), so behind
+// a container bridge every sign-in is not one shared address.
+func TestLocalProviderUsesGateProxies(t *testing.T) {
+	writeConfig(t, opts{}, "https://bolha.example")
+	t.Setenv("KUMAGATE_TRUSTED_PROXIES", "172.30.0.1")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := c.auth.Providers[0].(*auth.Local)
+	if len(l.TrustedProxies) != 1 || l.TrustedProxies[0].String() != "172.30.0.1/32" {
+		t.Fatalf("local provider trusts %v", l.TrustedProxies)
+	}
+	writeConfig(t, opts{local: "      trusted_proxies: [127.0.0.1]\n"}, "https://bolha.example")
+	t.Setenv("KUMAGATE_TRUSTED_PROXIES", "172.30.0.1")
+	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "trusted_proxies") {
+		t.Fatalf("disagreeing trusted_proxies: %v", err)
+	}
+	writeConfig(t, opts{local: "      trusted_proxies: [\"::1\", 127.0.0.1]\n"}, "https://bolha.example")
+	if _, err := loadConfig(); err != nil {
+		t.Fatalf("the same proxies in another order: %v", err)
+	}
+}
+
+// /logout says what signing out does to open Kuma tabs, and offers local accounts goweb's
+// "sign out everywhere", which ends every session of the account.
+func TestLogoutExplainsOpenTabs(t *testing.T) {
+	g := newGate(t, opts{})
+	body := g.do(t, "GET", adminHost, "/logout", nil, "Cookie", g.login(t, "ana")).Body.String()
+	if strings.Contains(body, "/account/signout-all") || !strings.Contains(body, "removed from the access list") {
+		t.Fatal("Mastodon session: wrong logout page")
+	}
+	var out, errb strings.Builder
+	if users([]string{"add", "vera", "viewer", "--password-stdin"}, strings.NewReader("a long enough password\n"), &out, &errb) != 0 {
+		t.Fatal(errb.String())
+	}
+	rec := g.do(t, "POST", adminHost, "/login", strings.NewReader("name=vera&password=a+long+enough+password&next=%2F"),
+		"Content-Type", "application/x-www-form-urlencoded", "Sec-Fetch-Site", "same-origin")
+	var vera string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "__Host-kuma-gate" {
+			vera = c.Name + "=" + c.Value
+		}
+	}
+	if vera == "" {
+		t.Fatalf("local sign-in: %d", rec.Code)
+	}
+	body = g.do(t, "GET", adminHost, "/logout", nil, "Cookie", vera).Body.String()
+	if !strings.Contains(body, `action="/account/signout-all"`) {
+		t.Fatal("local session: no sign-out-everywhere form")
+	}
+	g.do(t, "POST", adminHost, "/account/signout-all", nil, "Cookie", vera, "Sec-Fetch-Site", "same-origin")
+	if _, ok := g.s.auth.User(withCookie(vera)); ok {
+		t.Fatal("the old session still works after sign out everywhere")
+	}
+}
+
+func withCookie(c string) *http.Request {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Cookie", c)
+	return r
 }
 
 func TestCrossOriginIsRefused(t *testing.T) {

@@ -55,6 +55,29 @@ import (
 // /socket.io/ is session-only, and the status page's edit mode works on the admin host
 // with a session.
 //
+// Query strings: Kuma's response cache (server/utils/response-cache.js:12, 21) keys on the
+// full URL and keeps at most 1000 entries, so "?r=<random>" on a cached public route would
+// make Kuma do the work every time and push real entries out. The gate drops the query on
+// public routes whose Kuma handler never reads it, and keeps it only where Kuma does:
+//
+//	/api/push/<token>               msg, ping, status        api-router.js:49-51
+//	/api/badge/<id>/status          label, colours, style... api-router.js:162
+//	/api/badge/<id>/uptime          idem                     api-router.js:233
+//	/api/badge/<id>/ping            idem                     api-router.js:297
+//	/api/badge/<id>/avg-response    idem                     api-router.js:360
+//	/api/badge/<id>/cert-exp        date, label...           api-router.js:414, 430
+//	/api/badge/<id>/response        idem                     api-router.js:507
+//	/api/status-page/<slug>/incident-history   cursor        status-page-router.js:158
+//	/api/status-page/<slug>/badge   label, colours...        status-page-router.js:182
+//
+// Every other public handler reads no query: the entry page (server.js:264), the status
+// page HTML and RSS (status-page-router.js:16-33; the RSS link uses only proto and host,
+// model/status_page.js:133-141), the status page JSON, heartbeat and manifest
+// (status-page-router.js:39, 64, 113), /api/entry-page (api-router.js:27), robots.txt
+// (server.js:342) and the static files (server.js:357, 365). The status page's own "?edit"
+// is read by the browser (Vue router), not by Kuma's server, so dropping it upstream
+// changes nothing.
+//
 // Matching is exact and case-sensitive. Express matches case-insensitively and ignores a
 // trailing slash, so /STATUS/x or /api/push/<token>/ reach Kuma only with a session: the
 // gate errs on the side of asking for one.
@@ -73,12 +96,20 @@ var getHead = []string{http.MethodGet, http.MethodHead}
 var anyMethod = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
 
 type route struct {
-	re      *regexp.Regexp
-	methods []string
+	re        *regexp.Regexp
+	methods   []string
+	keepQuery bool // Kuma reads the query string (see above); otherwise it is dropped
 }
 
 func r(pattern string, methods []string) route {
 	return route{re: regexp.MustCompile(`^` + pattern + `$`), methods: methods}
+}
+
+// rq is a route whose Kuma handler reads the query string.
+func rq(pattern string, methods []string) route {
+	rt := r(pattern, methods)
+	rt.keepQuery = true
+	return rt
 }
 
 var publicRoutes = []route{
@@ -92,27 +123,28 @@ var publicRoutes = []route{
 	r(`/status/`+slug+`/rss`, getHead),
 	r(`/status-page`, getHead),
 	r(`/api/entry-page`, getHead),
-	r(`/api/push/`+token, anyMethod),
-	r(`/api/badge/`+badgeID+`/(?:status|cert-exp|response)`, getHead),
-	r(`/api/badge/`+badgeID+`/(?:uptime|ping|avg-response)(?:/`+dur+`)?`, getHead),
+	rq(`/api/push/`+token, anyMethod),
+	rq(`/api/badge/`+badgeID+`/(?:status|cert-exp|response)`, getHead),
+	rq(`/api/badge/`+badgeID+`/(?:uptime|ping|avg-response)(?:/`+dur+`)?`, getHead),
 	r(`/api/status-page/`+slug, getHead),
 	r(`/api/status-page/heartbeat/`+slug, getHead),
-	r(`/api/status-page/`+slug+`/(?:manifest\.json|incident-history|badge)`, getHead),
+	r(`/api/status-page/`+slug+`/manifest\.json`, getHead),
+	rq(`/api/status-page/`+slug+`/(?:incident-history|badge)`, getHead),
 }
 
-// isPublic: Kuma answers this without a session.
-func isPublic(method, path string) bool {
+// public: Kuma answers this without a session; keepQuery says whether Kuma reads the query.
+func public(method, path string) (ok, keepQuery bool) {
 	for _, rt := range publicRoutes {
 		if rt.re.MatchString(path) {
 			for _, m := range rt.methods {
 				if m == method {
-					return true
+					return true, rt.keepQuery
 				}
 			}
-			return false
+			return false, false
 		}
 	}
-	return false
+	return false, false
 }
 
 // canonical returns the path the gate decides on, which is also the path Kuma gets, or

@@ -105,6 +105,8 @@ func newFakeMastodon(t *testing.T) *httptest.Server {
 
 type opts struct {
 	admins   string // the gate.admins YAML list
+	gate     string // instead of admins: the whole text after the auth section (gate and more)
+	local    string // extra lines for the local provider
 	ttl      string
 	upstream string // override KUMAGATE_UPSTREAM
 }
@@ -133,17 +135,17 @@ func writeConfig(t *testing.T, o opts, mastodon string) string {
       type: local
       label: Local account
       users_file: ` + filepath.Join(dir, "users.json") + `
-      trusted_proxies: [127.0.0.1, "::1"]
-    - id: bolha
+` + o.local + `    - id: bolha
       type: mastodon
       label: bolha.us
       instance: ` + mastodon + `
       client_id_env: KUMAGATE_BOLHA_CLIENT_ID
       client_secret_env: KUMAGATE_BOLHA_CLIENT_SECRET
       roles: {Fundador: admin, Protetores: viewer}
-gate:
-  admins: ` + o.admins + `
-`
+` + o.gate
+	if o.gate == "" {
+		yaml += "gate:\n  admins: " + o.admins + "\n"
+	}
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
@@ -176,11 +178,7 @@ func newGate(t *testing.T, o opts) *gate {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := newServer(cfg, tmpl)
+	s, err := newServer(cfg, mustTemplates(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,3 +243,12 @@ func (g *gate) login(t *testing.T, acct string) string {
 }
 
 func navigate() []string { return []string{"Sec-Fetch-Mode", "navigate", "Accept", "text/html"} }
+
+func mustTemplates(t *testing.T) *template.Template {
+	t.Helper()
+	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tmpl
+}
