@@ -402,4 +402,3 @@ func TestUpstreamDownIsAPage(t *testing.T) {
 		t.Fatalf("Kuma down: %d", rec.Code)
 	}
 }
-
