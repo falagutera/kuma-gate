@@ -262,28 +262,30 @@ func TestAllowlistFailsClosed(t *testing.T) {
 // query would bust Kuma's 1000-entry response cache.
 func TestPublicQueryOnlyWhereKumaReadsIt(t *testing.T) {
 	g := newGate(t, opts{})
-	for path, want := range map[string]string{
-		"/?r=1":                      "",
-		"/status/bolha?edit":         "",
-		"/status/bolha/rss?r=1":      "",
-		"/status?r=1":                "",
-		"/status-page?r=1":           "",
-		"/api/entry-page?r=1":        "",
-		"/api/status-page/bolha?r=1": "",
-		"/api/status-page/heartbeat/bolha?r=12345":           "",
-		"/api/status-page/bolha/manifest.json?r=1":           "",
-		"/assets/index-D3kJ8a_x.js?v=2":                      "",
-		"/upload/logo1.png?t=123":                            "",
-		"/icon.svg?r=1":                                      "",
-		"/robots.txt?r=1":                                    "",
-		"/api/push/abc?status=up&msg=OK&ping=12":             "status=up&msg=OK&ping=12",
-		"/api/badge/1/status?label=x&upColor=green":          "label=x&upColor=green",
-		"/api/badge/1/uptime/24h?labelPrefix=a":              "labelPrefix=a",
-		"/api/badge/1/cert-exp?date=true":                    "date=true",
-		"/api/badge/1/response?style=flat":                   "style=flat",
-		"/api/status-page/bolha/incident-history?cursor=abc": "cursor=abc",
-		"/api/status-page/bolha/badge?label=Status":          "label=Status",
+	// a list, not a map literal: gofmt 1.26 and 1.27 align long map keys differently
+	for _, c := range []struct{ path, want string }{
+		{"/?r=1", ""},
+		{"/status/bolha?edit", ""},
+		{"/status/bolha/rss?r=1", ""},
+		{"/status?r=1", ""},
+		{"/status-page?r=1", ""},
+		{"/api/entry-page?r=1", ""},
+		{"/api/status-page/bolha?r=1", ""},
+		{"/api/status-page/heartbeat/bolha?r=12345", ""},
+		{"/api/status-page/bolha/manifest.json?r=1", ""},
+		{"/assets/index-D3kJ8a_x.js?v=2", ""},
+		{"/upload/logo1.png?t=123", ""},
+		{"/icon.svg?r=1", ""},
+		{"/robots.txt?r=1", ""},
+		{"/api/push/abc?status=up&msg=OK&ping=12", "status=up&msg=OK&ping=12"},
+		{"/api/badge/1/status?label=x&upColor=green", "label=x&upColor=green"},
+		{"/api/badge/1/uptime/24h?labelPrefix=a", "labelPrefix=a"},
+		{"/api/badge/1/cert-exp?date=true", "date=true"},
+		{"/api/badge/1/response?style=flat", "style=flat"},
+		{"/api/status-page/bolha/incident-history?cursor=abc", "cursor=abc"},
+		{"/api/status-page/bolha/badge?label=Status", "label=Status"},
 	} {
+		path, want := c.path, c.want
 		if rec := g.do(t, "GET", bolhaHost, path, nil); rec.Code != 200 {
 			t.Errorf("%s: %d", path, rec.Code)
 			continue
