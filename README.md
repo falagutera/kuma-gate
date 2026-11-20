@@ -120,8 +120,8 @@ sudo chmod 0640 /etc/kuma-gate/kuma-gate.env /etc/kuma-gate/config.yaml
 so run it as the service user with the env file loaded. Either type the password in:
 
 ```sh
-sudo -u kuma-gate sh -c 'set -a; . /etc/kuma-gate/kuma-gate.env; exec kuma-gate user add ana admin --password-stdin'
-# type the password (12 to 256 characters), then Enter
+read -rs PW && printf '%s\n' "$PW" | sudo -u kuma-gate sh -c 'set -a; . /etc/kuma-gate/kuma-gate.env; exec kuma-gate user add ana admin --password-stdin'; unset PW
+# type the password (12 to 256 characters, not echoed), then Enter
 ```
 
 or let it make one, printed once:
@@ -201,8 +201,8 @@ gate:
   admins: [bolha:gutocarvalho, bolha:robertomurta, bolha:ulyssesalmeida]
 ```
 
-- **`roles`** maps the instance's role names (as in its admin panel, Moderation → Roles; case does
-  not matter) to a level. Only `admin` reaches Kuma. An account whose role is not listed cannot sign in.
+- **`roles`** maps the instance's role names (as in its admin panel, Administration → Roles; case
+  does not matter) to a level. Only `admin` reaches Kuma. An account whose role is not listed cannot sign in.
 - **`gate.admins`** narrows it to specific people: `<provider id>:<username>`, here three people
   of bolha.us. Others with the same role sign in but get the "not allowed" page. Use it when a
   role is shared by more people than should manage your monitoring. Without the list, every
@@ -403,8 +403,8 @@ and a fake Mastodon instance:
   the admin host); every public path passes on every host with its Host intact;
 - path tricks (`..`, `//`, `%2f`, `%2e`, `%5c`, `;`, absolute-form, case) give 400 or are denied;
 - the allowlist and the admin level (a Fundador not in `gate.admins` and a viewer are refused),
-  cross-origin socket.io and websocket refused, websocket only with a session, outliving the
-  server's timeouts and closing when the session ends;
+  cross-origin socket.io and websocket refused, websocket only with a session; a websocket and a socket.io
+  long-poll outliving the server's timeouts, and the websocket closing when the session ends;
 - the gate's cookies never reach Kuma (and Kuma cannot set them), `X-Forwarded-*` cannot be
   spoofed by a client, body limits, push tokens never in the log, the gate's `/login` and
   `/assets/style.css` win over Kuma while Kuma's `/assets/*` pass;

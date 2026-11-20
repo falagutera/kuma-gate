@@ -119,7 +119,8 @@ func isPublic(method, path string) bool {
 // false when the request target is not in the one plain form we accept: origin-form
 // ("/..."), printable ASCII only, no percent-encoding at all (no Kuma route needs it, and
 // %2f/%2e/%5c are how path tricks hide), no backslash, no empty segment ("//"), no "." or
-// ".." segment and no ";". Query strings are not looked at here and are forwarded as sent.
+// ".." segment and no ";". Query strings are not looked at here; they are forwarded as
+// httputil.ReverseProxy leaves them (it drops unparsable query parameters, e.g. with ";").
 func canonical(r *http.Request) (string, bool) {
 	raw := r.RequestURI
 	if i := strings.IndexByte(raw, '?'); i >= 0 {

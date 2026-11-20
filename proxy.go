@@ -31,8 +31,11 @@ const (
 
 	// Deadlines of a proxied (non-upgrade) request, instead of the server's 10 s / 30 s
 	// meant for the gate's own pages: socket.io long-polling holds a GET for up to its
-	// ping interval (25 s) and slow admin calls can take longer.
-	proxyReadTimeout  = 60 * time.Second
+	// ping interval (25 s) and slow admin calls can take longer. The server's ReadTimeout
+	// matters even without a body: net/http keeps a background read on the connection and
+	// cancels the request when its deadline passes, so it is moved too. Order:
+	// ResponseHeaderTimeout (90 s, a clean 502) < read (100 s) < write (120 s).
+	proxyReadTimeout  = 100 * time.Second
 	proxyWriteTimeout = 120 * time.Second
 )
 
@@ -129,7 +132,11 @@ func (s *server) proxyError(w http.ResponseWriter, r *http.Request, err error) {
 		s.deny(w, r, http.StatusRequestEntityTooLarge)
 		return
 	case errors.Is(err, context.Canceled):
-		return // the client left, or a websocket's session ended
+		// the client left, or a websocket's session ended: nothing worth a log line
+		if !isUpgrade(r) {
+			s.deny(w, r, http.StatusBadGateway)
+		}
+		return
 	}
 	log.Printf("upstream: %s %q: %s", r.Method, redactPath(r.URL.Path), redactText(err.Error()))
 	if wantsHTML(r) {

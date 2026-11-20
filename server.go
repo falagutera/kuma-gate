@@ -149,7 +149,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 func (s *server) private(w http.ResponseWriter, r *http.Request, path string) {
 	u, ok := s.auth.User(r)
 	if !ok {
-		if isNavigation(r) && path != "/socket.io/" {
+		if isNavigation(r) && !strings.HasPrefix(path, "/socket.io/") {
 			setSecurityHeaders(w.Header())
 			http.Redirect(w, r, "/login?next="+url.QueryEscape(path), http.StatusFound)
 			return
@@ -243,7 +243,7 @@ func headerHasToken(h http.Header, key, token string) bool {
 func needsSameOrigin(r *http.Request, path string) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return isUpgrade(r) || path == "/socket.io/"
+		return isUpgrade(r) || strings.HasPrefix(path, "/socket.io/") // engine.io claims the whole prefix
 	}
 	return true
 }

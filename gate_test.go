@@ -27,7 +27,7 @@ var privateKuma = []struct{ method, path string }{
 	{"GET", "/metrics"}, {"GET", "/screenshots/1.png"}, {"GET", "/setup-database-info"},
 	{"POST", "/setup-database"}, {"GET", "/.well-known/change-password"}, {"GET", "/index.html"},
 	{"POST", "/test-webhook"}, {"GET", "/_e2e/take-sqlite-snapshot"},
-	{"GET", "/socket.io/?EIO=4&transport=polling"}, {"POST", "/socket.io/?EIO=4&transport=polling&sid=x"},
+	{"GET", "/socket.io/?EIO=4&transport=polling"}, {"GET", "/socket.io/x?EIO=4&transport=polling"}, {"POST", "/socket.io/?EIO=4&transport=polling&sid=x"},
 	// /api/* outside the public list, and wrong methods or shapes of public ones
 	{"GET", "/api/status-page"}, {"POST", "/api/status-page/x"}, {"DELETE", "/api/status-page/x"},
 	{"POST", "/api/status-page/upload-logo"}, {"GET", "/api/badge/abc/status"},
@@ -238,6 +238,12 @@ func TestCrossOriginIsRefused(t *testing.T) {
 			t.Errorf("%v: %d", hdr, rec.Code)
 		}
 	}
+	// GETs too, anywhere under /socket.io/ (engine.io answers the whole prefix)
+	for _, p := range []string{"/socket.io/?EIO=4&transport=polling", "/socket.io/x?EIO=4&transport=polling"} {
+		if rec := g.do(t, "GET", adminHost, p, nil, "Cookie", ana, "Sec-Fetch-Site", "same-site"); rec.Code != 403 {
+			t.Errorf("same-site GET %s: %d", p, rec.Code)
+		}
+	}
 	if g.kuma.count() != 0 {
 		t.Fatal("a cross-origin request reached Kuma")
 	}
@@ -396,3 +402,4 @@ func TestUpstreamDownIsAPage(t *testing.T) {
 		t.Fatalf("Kuma down: %d", rec.Code)
 	}
 }
+

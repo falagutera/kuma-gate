@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -44,6 +45,9 @@ func newFakeKuma(t *testing.T) *fakeKuma {
 		k.hits = append(k.hits, hit{r.Method, r.URL.Path, r.URL.RawQuery, r.Host, r.Header.Clone()})
 		k.mu.Unlock()
 		io.Copy(io.Discard, r.Body)
+		if r.URL.Query().Get("sleep") != "" {
+			time.Sleep(700 * time.Millisecond) // a long-poll held open by socket.io
+		}
 		if r.Header.Get("Upgrade") == "websocket" {
 			conn, brw, err := http.NewResponseController(w).Hijack()
 			if err != nil {

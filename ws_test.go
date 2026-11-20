@@ -120,3 +120,23 @@ func TestWebsocketClosesWhenSessionEnds(t *testing.T) {
 		t.Fatalf("websocket still open after the session expired: %v after %s", err, time.Since(start))
 	}
 }
+
+// socket.io starts with HTTP long-polling: a GET held open longer than the server's
+// Read/WriteTimeout must still get its answer (proxied requests have their own deadlines).
+func TestLongPollingOutlivesServerTimeouts(t *testing.T) {
+	g := newGate(t, opts{})
+	addr := liveGate(t, g)
+	req, _ := http.NewRequest("GET", "http://"+addr+"/socket.io/?EIO=4&transport=polling&sleep=1", nil)
+	req.Host = adminHost
+	req.Header.Set("Cookie", g.login(t, "ana"))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 || string(body) != "kuma /socket.io/" {
+		t.Fatalf("long-poll: %d %q", res.StatusCode, body)
+	}
+}
