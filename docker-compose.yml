@@ -1,0 +1,28 @@
+# kuma-gate in a container, next to Uptime Kuma. The usual install is the static binary with
+# systemd (README); this is the container alternative. Settings go in .env (.env.example).
+# Kuma must publish no port at all here: kuma-gate reaches it on the compose network
+# (KUMAGATE_UPSTREAM=http://uptime-kuma:3001), and nginx on the host reaches kuma-gate.
+services:
+  kuma-gate:
+    build: .
+    image: kuma-gate:local
+    container_name: kuma-gate
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KUMAGATE_AUTH_CONFIG: /etc/kuma-gate/config.yaml
+      KUMAGATE_DATA: /data
+      # nginx on the host reaches the container from the bridge's gateway, not 127.0.0.1
+      KUMAGATE_TRUSTED_PROXIES: 172.16.0.0/12
+    volumes:
+      - ./config.yaml:/etc/kuma-gate/config.yaml:ro
+      - kuma-gate-data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    ports:
+      - "127.0.0.1:3003:3003"
+
+volumes:
+  kuma-gate-data:

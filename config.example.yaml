@@ -1,0 +1,49 @@
+# kuma-gate: sign-in providers (goweb's "auth" section) and the gate's own "gate" section.
+# Point KUMAGATE_AUTH_CONFIG at this file. It holds no secret: it names the variables that do.
+# Unknown keys, a wrong field for a provider type or an empty secret variable stop the start
+# with a message that says what is wrong.
+
+auth:
+  session_ttl: 8h            # how long a sign-in lasts
+  providers:
+    # Local accounts: kept by kuma-gate (argon2id passwords, TOTP required for admins).
+    # Needs KUMAGATE_AUTH_KEY. Create the first one with: kuma-gate user add <name> admin
+    - id: local
+      type: local
+      label: Local account
+      totp_level: admin                        # TOTP from this level up (viewer, editor, admin)
+      users_file: /var/lib/kuma-gate/users.json
+      trusted_proxies: [127.0.0.1, "::1"]      # nginx; whose X-Forwarded-For counts for the sign-in limits
+
+    # A Mastodon instance. On the instance: Preferences > Development > New application,
+    # scope "profile" only, redirect URI <KUMAGATE_BASE_URL>/auth/callback.
+    # - id: bolha                               # names the provider in sessions and in gate.admins
+    #   type: mastodon
+    #   label: bolha.us
+    #   instance: https://bolha.us
+    #   client_id_env: KUMAGATE_BOLHA_CLIENT_ID
+    #   client_secret_env: KUMAGATE_BOLHA_CLIENT_SECRET
+    #   roles: {Fundador: admin, "Sábios": admin}   # the instance's role names; only admin gets into Kuma
+    #   # sign_in_without_role: true            # also let in accounts without a listed role (level none):
+    #   #                                       # they sign in but are refused; useful only with gate.admins
+
+    # Any OpenID Connect provider (Authentik, Keycloak, GitLab, id.bolha.us...).
+    # Callback: <KUMAGATE_BASE_URL>/auth/callback. See goweb's README for the details.
+    # - id: idbolha
+    #   type: oidc
+    #   label: id.bolha.us
+    #   issuer: https://id.bolha.us
+    #   scopes: [openid, profile, groups]
+    #   roles_claim: groups
+    #   client_id_env: KUMAGATE_ID_CLIENT_ID
+    #   client_secret_env: KUMAGATE_ID_CLIENT_SECRET
+    #   roles: {kuma-admins: admin}             # names only the provider's administrators control
+
+gate:
+  # Who may pass, on top of the admin level: "<provider id>:<account>". Empty or missing:
+  # every admin of every provider. Everyone who passes is Kuma's single admin user.
+  admins:
+    - local:guto
+    # - bolha:gutocarvalho
+    # - bolha:robertomurta
+    # - bolha:ulyssesalmeida

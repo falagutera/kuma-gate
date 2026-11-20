@@ -1,0 +1,13 @@
+{{template "head" .}}
+<section class="hero">
+  <p class="kicker">{{.T.kicker}}</p>
+  <h1>{{.T.logout_a}} <em>{{.T.logout_b}}</em></h1>
+  {{if .Account}}
+  <p class="lede">{{printf .T.logout_lede .Account}}</p>
+  <form method="post" action="/logout">{{.CSRF}}<button type="submit">{{.T.logout_btn}}</button> <a class="btn secondary" href="/dashboard">{{.T.open_kuma}}</a></form>
+  {{else}}
+  <p class="lede">{{.T.logout_none}}</p>
+  <p><a class="btn" href="/login">{{.T.signin}}</a></p>
+  {{end}}
+</section>
+{{template "foot" .}}

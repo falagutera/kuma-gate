@@ -1,0 +1,11 @@
+{{template "head" .}}
+<section class="hero">
+  <p class="kicker">{{.T.kicker}}</p>
+  <h1>{{.T.error_title}}</h1>
+  <p class="lede">{{if eq .Status 400}}{{.T.error_400}}{{else if eq .Status 401}}{{.T.error_401}}{{else if eq .Status 403}}{{if .Account}}{{printf .T.error_403_who .Account}}{{else}}{{.T.error_403}}{{end}}{{else if eq .Status 404}}{{.T.error_404}}{{else if eq .Status 405}}{{.T.error_405}}{{else if eq .Status 413}}{{.T.error_413}}{{else if eq .Status 502}}{{.T.error_502}}{{else if ge .Status 500}}{{.T.error_500}}{{else}}{{.T.error_other}}{{end}}</p>
+  {{if .Detail}}<p class="lede">{{index .T .Detail}}</p>{{end}}
+  {{if .Account}}<form method="post" action="/logout">{{.CSRF}}<button type="submit">{{.T.logout_btn}}</button></form>
+  {{else if eq .Status 401}}<p><a class="btn" href="/login">{{.T.signin}}</a></p>
+  {{else}}<p><a class="btn" href="/">{{.T.home}}</a></p>{{end}}
+</section>
+{{template "foot" .}}

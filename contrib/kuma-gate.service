@@ -1,0 +1,38 @@
+# /etc/systemd/system/kuma-gate.service
+# Needs the system user (useradd --system --home-dir /var/lib/kuma-gate --shell /usr/sbin/nologin kuma-gate)
+# and /etc/kuma-gate/kuma-gate.env (root:kuma-gate, 0640). See the README.
+[Unit]
+Description=kuma-gate, the sign-in in front of Uptime Kuma
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/kuma-gate
+EnvironmentFile=/etc/kuma-gate/kuma-gate.env
+User=kuma-gate
+Group=kuma-gate
+StateDirectory=kuma-gate
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=2s
+
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

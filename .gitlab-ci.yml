@@ -1,0 +1,40 @@
+# Shared security stage (betterleaks, govulncheck and trivy block; the rest is informative), then
+# vet, gofmt, the tests and govulncheck. On the default branch the image is published to
+# registry.gutocarvalho.net/images/kuma-gate with tags X.Y.Z-BUILD (immutable, pin this one), X.Y.Z and latest.
+# Runs on the open group's runners (untagged jobs). The version is in the VERSION file.
+include:
+  - project: 'open/gcn/ci-templates'
+    file: '/security.yml'
+    ref: main
+stages: [security, test, build]
+
+test:
+  stage: test
+  image: golang:1.26-alpine
+  variables:
+    CGO_ENABLED: "0"
+  script:
+    - go vet ./...
+    - test -z "$(gofmt -l .)"
+    - go test -p 1 ./...
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+    - "$(go env GOPATH)/bin/govulncheck ./..."
+
+build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    IMAGE: registry.gutocarvalho.net/images/kuma-gate
+  before_script:
+    - echo "$IMAGES_REGISTRY_PASSWORD" | docker login -u "$IMAGES_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - V="$(cat VERSION)"
+    - docker build --pull -q --build-arg "BUILD=$CI_PIPELINE_ID" -t "$IMAGE:$V-$CI_PIPELINE_ID" .
+    - for t in "$V" latest; do docker tag "$IMAGE:$V-$CI_PIPELINE_ID" "$IMAGE:$t"; done
+    - for t in "$V-$CI_PIPELINE_ID" "$V" latest; do docker push -q "$IMAGE:$t"; done
+    - echo "published $IMAGE:$V-$CI_PIPELINE_ID"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
