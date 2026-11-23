@@ -3,6 +3,13 @@
 All notable changes to kuma-gate. Versions follow [SemVer](https://semver.org/); images are
 published as `registry.gutocarvalho.net/images/kuma-gate:<version>-<build>`.
 
+## 0.1.1 — 2026-11-23
+
+- On a status-only host, opening a page of the dashboard (a bookmark, Kuma's "Manage status
+  page" link) now takes you to the same page on the admin host, where you sign in, instead of a
+  "Page not found". The query string is left behind; requests that are not a page visit
+  (API calls, the live connection) still get a 404 there.
+
 ## 0.1.0 — 2026-11-19
 
 - First version: a sign-in in front of Uptime Kuma 2.5.12 (run with "Disable Auth" on). People

@@ -52,6 +52,12 @@ func TestPrivateKumaRoutesNeedSession(t *testing.T) {
 				}
 				rec := g.do(t, c.method, host, c.path, nil, hdr...)
 				switch {
+				case host != adminHost && nav && c.method == "GET" && !strings.HasPrefix(c.path, "/socket.io/"):
+					// a status-only host sends a person to the admin host, without the query
+					want := "https://" + adminHost + strings.SplitN(c.path, "?", 2)[0]
+					if rec.Code != 302 || rec.Header().Get("Location") != want {
+						t.Errorf("%s %s on %s (navigation): %d %q, want a redirect to %s", c.method, c.path, host, rec.Code, rec.Header().Get("Location"), want)
+					}
 				case host != adminHost:
 					if rec.Code != 404 {
 						t.Errorf("%s %s on %s: %d, want 404", c.method, c.path, host, rec.Code)
@@ -207,9 +213,21 @@ func TestSessionAndAllowlist(t *testing.T) {
 	if g.kuma.count() != 1 {
 		t.Fatal("a refused person reached Kuma")
 	}
-	// a session is no use on a status-only host (and the cookie is __Host- anyway)
-	if rec := g.do(t, "GET", bolhaHost, "/dashboard", nil, append(navigate(), "Cookie", ana)...); rec.Code != 404 {
-		t.Errorf("session on a status host: %d", rec.Code)
+	// a session is no use on a status-only host (and the cookie is __Host- anyway): a page
+	// of the panel there sends the browser to the admin host, same path, no query
+	if rec := g.do(t, "GET", bolhaHost, "/manage-status-page?x=1", nil, append(navigate(), "Cookie", ana)...); rec.Code != 302 ||
+		rec.Header().Get("Location") != "https://"+adminHost+"/manage-status-page" || g.kuma.count() != 1 {
+		t.Errorf("panel page on a status host: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	// not a navigation (fetch, script) or socket.io: still nothing there
+	if rec := g.do(t, "GET", bolhaHost, "/dashboard", nil); rec.Code != 404 {
+		t.Errorf("fetch of /dashboard on a status host: %d", rec.Code)
+	}
+	if rec := g.do(t, "GET", bolhaHost, "/socket.io/?EIO=4&transport=polling", nil, navigate()...); rec.Code != 404 {
+		t.Errorf("socket.io on a status host: %d", rec.Code)
+	}
+	if rec := g.do(t, "POST", bolhaHost, "/dashboard", nil, navigate()...); rec.Code != 404 {
+		t.Errorf("POST on a status host: %d", rec.Code)
 	}
 	// the redirect keeps where the person was going
 	if rec := g.do(t, "GET", adminHost, "/settings/general", nil, navigate()...); rec.Header().Get("Location") != "/login?next=%2Fsettings%2Fgeneral" {

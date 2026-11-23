@@ -135,7 +135,17 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !admin {
-		s.renderError(w, r, http.StatusNotFound) // status-only host: never a login page
+		// Status-only host: never a login page here. A person who opens a panel page
+		// (the bookmark, the Kuma link "Manage status page") is sent to the same path on
+		// the admin host, where the sign-in is: one OAuth callback, one session. The query
+		// is dropped and the host is fixed, so this redirects nowhere else. Anything else
+		// (API, socket.io, scripts) still gets a 404.
+		if isNavigation(r) && !strings.HasPrefix(path, "/socket.io/") {
+			setSecurityHeaders(w.Header())
+			http.Redirect(w, r, "https://"+s.cfg.adminHost+path, http.StatusFound)
+			return
+		}
+		s.renderError(w, r, http.StatusNotFound)
 		return
 	}
 	if isGatePath(path) {

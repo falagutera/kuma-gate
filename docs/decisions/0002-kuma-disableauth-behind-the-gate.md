@@ -21,7 +21,8 @@ kuma-gate is the only way to it. The gate:
 - decides on the exact path it forwards: any percent-encoding, backslash, `//`, `.`/`..`
   segment or `;` is a 400, so the gate and Kuma never read a path differently;
 - serves Kuma's admin UI only on the BaseURL host; other hosts get the public paths or a 404,
-  never a sign-in page;
+  never a sign-in page (since 0.1.1 a page visit there is redirected to the same path on the
+  BaseURL host, a fixed host, so the sign-in still happens in one place);
 - requires a goweb session at level admin and one of the `User.Key()` values in `gate.admins`;
   letting in every admin needs the explicit `gate.allow_all_admins: true`, and a missing,
   empty or misspelled section stops the start (fail closed);

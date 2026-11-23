@@ -42,7 +42,8 @@ status pages, badges and push URLs public. Built and tested against **Uptime Kum
   a session you are sent to `/login`, and back to where you were after signing in.
 - Status pages (`/status/<slug>`), badges and push URLs work for everyone, without signing in,
   on the admin host and on the status-only hosts (`KUMAGATE_STATUS_HOSTS`). On a status-only
-  host anything else is a 404: no sign-in page there.
+  host there is no sign-in page: opening a dashboard page sends the browser to the same path on
+  the admin host (no query string), and anything else is a 404.
 - To sign out, open `/logout` and press the button. That ends the session **in this browser
   only**: a Kuma tab already open in another browser keeps working until the session expires
   (`session_ttl`, 4 h in the examples). To cut those too, local accounts use **"Sign out
@@ -482,7 +483,8 @@ that costs: [docs/decisions/0002](docs/decisions/0002-kuma-disableauth-behind-th
 1. CONNECT/TRACE → 405; a non-canonical path → 400; `/healthz` answers on any host.
 2. A Host that is neither the admin host nor a status host → 404.
 3. kuma-gate's own stylesheet; then the public list → proxied to Kuma, no session needed.
-4. Not the admin host → 404. The gate's pages (`/login`, `/auth/callback`, `/logout`,
+4. Not the admin host → a page visit (GET, not `/socket.io/`) is redirected to the same path
+   on the admin host, without the query; anything else → 404. On the admin host, the gate's pages (`/login`, `/auth/callback`, `/logout`,
    `/login/totp`, `/account*`, `/admin/users*`, `/release-notes`) → served by the gate. Kuma has
    none of these routes, so nothing of Kuma is hidden.
 5. Anything else needs a session: none → `/login?next=...` for a page, 401 otherwise; not an
